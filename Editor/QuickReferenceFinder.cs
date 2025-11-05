@@ -2,29 +2,39 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
-namespace Bears
+namespace BearsEditorTools
 {
     public class QuickReferenceFinder : EditorWindow
     {
-        [MenuItem("Tools/Quick Reference Finder")]
+     
+        [MenuItem("Tools/Bears/Quick Reference Finder")]
         public static void ShowWindow()
         {
             GetWindow<QuickReferenceFinder>("Quick Reference Finder");
         }
 
-        [SerializeField] private string searchTargetGuid;
-        [SerializeField] private Object searchTargetObject;
-        
-        [SerializeField] private List<Object> results;
-        [SerializeField] private List<string> nonAssetResults;
+        [SerializeField]
+        private string searchTargetGuid;
+        [SerializeField]
+        private Object searchTargetObject;
+        [SerializeField]
+        private List<Object> results;
+        [SerializeField]
+        private List<string> nonAssetResults;
 
+        private Dictionary<Object, List<long>> resultsFileIDs;
+        
         private Vector2 _scroll;
         
+        private float _lastSearchTime;
+
         private void OnEnable()
         {
             Selection.selectionChanged += Repaint;
@@ -36,7 +46,7 @@ namespace Bears
         }
 
         [MenuItem("Assets/Find References In Project (Quick)", true, 19)]
-        private static bool Validate_AssetContextMenuSearch()
+        private static bool AssetContextMenuSearchValidate()
         {
             return Selection.activeObject != null && AssetDatabase.Contains(Selection.activeObject);
         }      
@@ -51,46 +61,42 @@ namespace Bears
         
         private void OnGUI()
         {
-            GUILayout.Label("Find all assets containing the search text in /Assets, /Packages and /ProjectSettings", EditorStyles.centeredGreyMiniLabel);
-            bool hasValidSelection = Selection.activeObject != null && AssetDatabase.Contains(Selection.activeObject);
+            GUI.enabled = Selection.activeObject != null && AssetDatabase.Contains(Selection.activeObject);
 
-            GUI.enabled = hasValidSelection;
-            GUI.backgroundColor = new Color(0.22f, 0.4f, 0.87f);
-            
-            string label = hasValidSelection
-                ? $"Search for guid:\n{Selection.activeObject.name} ({Selection.activeObject.GetType()})"
-                : "Select an asset to search for its GUID.";
-            
-            if (GUILayout.Button(label, GUILayout.Height(40)))
+            GUI.backgroundColor = Color.green;
+            if (GUILayout.Button("Find References to Selected Asset:" + "\n" + 
+                                 (GUI.enabled
+                                     ? (Selection.activeObject.name) + $" ({Selection.activeObject.GetType()})"
+                                     : "(Must select an asset)"), GUILayout.Height(40)))
             {
                 FindReferencesToSelectedObject();
             }
-            
             GUI.backgroundColor = Color.white;
+
             GUI.enabled = true;
             
-            using (new EditorGUILayout.HorizontalScope())
+            EditorGUILayout.BeginHorizontal();
+
+            EditorGUIUtility.labelWidth = 38;
+            searchTargetGuid = EditorGUILayout.TextField("Guid", searchTargetGuid);
+            
+            if (GUILayout.Button("Find", GUILayout.Width(40)))
             {
-                EditorGUIUtility.labelWidth = 38;
-
-                searchTargetGuid = EditorGUILayout.TextField("Text", searchTargetGuid);
-
-                GUI.color = Color.yellow;
-                if (GUILayout.Button("Search", GUILayout.Width(70)))
-                {
-                    SearchForString(searchTargetGuid);
-                }
-                GUI.color = Color.white;
+                SearchForGuid(searchTargetGuid);
             }
             
-            GUI.enabled = false;
-            EditorGUILayout.ObjectField("Asset", searchTargetObject, searchTargetObject.GetType(), false);
-            GUI.enabled = true;
+            EditorGUILayout.EndHorizontal();
+            
+            if (searchTargetObject)
+            {
+                EditorGUILayout.ObjectField("Asset", searchTargetObject, searchTargetObject.GetType(), false);
+            }
             
             EditorGUIUtility.labelWidth = 0;
             
             if (results != null)
             {
+                
                 _scroll = EditorGUILayout.BeginScrollView(_scroll);
                 DrawResults();
                 EditorGUILayout.EndScrollView();
@@ -108,6 +114,47 @@ namespace Bears
                     foreach (var obj in results)
                     {
                         EditorGUILayout.ObjectField(obj, obj.GetType(), false);
+   
+                        if (resultsFileIDs != null && resultsFileIDs.TryGetValue(obj, out List<long> list))
+                        {
+                            foreach (long l in list)
+                            {
+                                EditorGUILayout.BeginHorizontal();
+                                GUILayout.Space(15f);
+                                bool button = GUILayout.Button($"FileID: {l}", EditorStyles.miniButton);
+                                EditorGUILayout.EndHorizontal();
+                                if (button)
+                                {
+                                                 
+                                    PropertyInfo inspectorModeInfo =
+                                        typeof(SerializedObject).GetProperty("inspectorMode", BindingFlags.NonPublic | BindingFlags.Instance);
+                                
+                                    if (obj is SceneAsset scene)
+                                    {
+                                        Debug.Log($"LOoking for FileID {l} in scene: " + scene.name);
+                                        var rootObjectsInScene = SceneManager.GetSceneByPath(AssetDatabase.GetAssetPath(scene)).GetRootGameObjects();
+                                        var allComponents      = rootObjectsInScene.SelectMany(ro => ro.GetComponentsInChildren<MonoBehaviour>(true)).ToList();
+                                        foreach (var c in allComponents)
+                                        {
+                                            if (!c)
+                                                continue;
+                                        
+                                            SerializedObject so = new SerializedObject(c);
+                                            inspectorModeInfo.SetValue(so, InspectorMode.Debug, null);
+                                            SerializedProperty serializedProperty = so.FindProperty("m_LocalIdentfierInFile");
+                                        
+                                            if(serializedProperty.longValue == l)
+                                            {
+                                                Selection.activeObject = c.gameObject;
+                                                EditorGUIUtility.PingObject(c);
+                                                Debug.Log($"Found component {c.GetType().Name} in scene {scene.name} with FileID {l}");
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -154,28 +201,65 @@ namespace Bears
             });
         }   
         
+        private Task<string> FindAllLinesWithFileIDs(string file)
+        {
+            return Task.Run(() =>
+            {
+                // Normalize path to Windows format with backslashes
+                string normalizedPath = Path.GetFullPath(file).Replace("/", "\\");
+                string arguments = $"/C findstr /N /C:\"---\" \"{normalizedPath}\"";
+
+                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", arguments)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                    UseShellExecute        = false,
+                    CreateNoWindow         = true,
+                    WorkingDirectory       = Path.GetDirectoryName(normalizedPath)
+                };
+                using (var process = System.Diagnostics.Process.Start(psi))
+                {
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
+
+                    process.WaitForExit();
+
+                    if(!string.IsNullOrEmpty(error))
+                        Debug.LogError($"findstr error for {normalizedPath}: {error}");
+
+                    return output;
+                }
+            });
+        }
+
         private void FindReferencesToSelectedObject()
         {
+            
+            // use windows findstr command to search for references in the project
             Object activeObject = Selection.activeObject;
             string selectedPath = AssetDatabase.GetAssetPath(activeObject);
             string selectedGuid = AssetDatabase.AssetPathToGUID(selectedPath);
 
-            searchTargetGuid = selectedGuid;
-            searchTargetObject = activeObject;
-            
-            SearchForString(selectedGuid);
+            SearchForGuid(selectedGuid);
         }
 
-        private void SearchForString(string target)
+        private void SearchForGuid(string selectedGuid)
         {
-            if(string.IsNullOrWhiteSpace(target))
+            EditorUtility.DisplayProgressBar("Searching References", "Please wait...", 0.5f);
+            
+            searchTargetGuid = selectedGuid;
+
+            string searchPath = AssetDatabase.GUIDToAssetPath(selectedGuid);
+            searchTargetObject = AssetDatabase.LoadAssetAtPath<Object>(searchPath);
+            if (searchTargetObject == null)
             {
-                Debug.LogError("No valid GUID to search for!");
+                Debug.LogWarning("Could not load asset at path: " + searchPath);
+                EditorUtility.ClearProgressBar();
+                
                 return;
             }
             
-            EditorUtility.DisplayProgressBar("Searching References", "Please wait...", 0.5f);
-            
+
             var startTime = DateTime.Now;
 
             string[] exts =
@@ -184,10 +268,10 @@ namespace Bears
             };
 
             string projectDir    = Application.dataPath.Substring(0, Application.dataPath.Length - 7);
-
-            IEnumerable<Task<string>> assetTasks    = exts.Select(ext => RunFindstr(target, Path.Combine(projectDir, "Assets"), ext));
-            IEnumerable<Task<string>> packageTasks  = exts.Select(ext => RunFindstr(target, Path.Combine(projectDir, "Packages"), ext));
-            IEnumerable<Task<string>> settingsTasks = exts.Select(ext => RunFindstr(target, Path.Combine(projectDir, "ProjectSettings"), ext));
+            
+            var    assetTasks    = exts.Select(ext => RunFindstr(selectedGuid, Path.Combine(projectDir, "Assets"), ext));
+            var    packageTasks  = exts.Select(ext => RunFindstr(selectedGuid, Path.Combine(projectDir, "Packages"), ext));
+            var    settingsTasks = exts.Select(ext => RunFindstr(selectedGuid, Path.Combine(projectDir, "ProjectSettings"), ext));
 
             Task<string>[] tasks = assetTasks.Concat(packageTasks).Concat(settingsTasks).ToArray();
             Task.WaitAll(tasks);
@@ -195,7 +279,8 @@ namespace Bears
             string combinedOutput = string.Join(Environment.NewLine, tasks.Select(t => t.Result));
 
             results         = new List<Object>();
-            nonAssetResults = new List<string>(); // projectsettings and the like
+            nonAssetResults = new List<string>();
+            resultsFileIDs  = new Dictionary<Object, List<long>>();
 
             Dictionary<Object, List<long>> resultsLineNumbers = new Dictionary<Object, List<long>>();
 
@@ -232,13 +317,85 @@ namespace Bears
                         nonAssetResults.Add(path);
                 }
             }
+
+            // This needs more work so it can find assets in scenes that reference the target object.
+            /*
+            foreach (Object obj in resultsLineNumbers.Keys)
+            {
+                string assetPath = AssetDatabase.GetAssetPath(obj);
+                string fullPath = Path.GetFullPath(Path.Combine(Application.dataPath, "..", assetPath));
+                
+                var fileIDTask = FindAllLinesWithFileIDs(fullPath);
+                fileIDTask.Wait();
+                
+                // Parse file IDs from output
+                List<long> fileIDs = new List<long>();
+                
+                string[] idLinesInFile = fileIDTask.Result.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+
+                string previousLineNumberData = "";
+
+                /*
+                foreach (var resultsLineNumber in resultsLineNumbers[obj])
+                {
+                    Debug.Log(resultsLineNumber);
+                }#1#
+                
+                // extract all line numbers from data strings. Up until colon, but nothing after, per line
+                var allNumbers = resultsLineNumbers[obj].ToList();
+                allNumbers.Reverse();
+                long activeLineNumber = allNumbers.Last();
+                
+                Debug.Log("All: " + string.Join(", ", allNumbers));
+                Debug.Log("Active: " + activeLineNumber);
+                
+                foreach (string fileIdLine in idLinesInFile)
+                {
+                    // line format: lineNumber:---
+                    int colonIndex = fileIdLine.IndexOf(':');
+                    long thisLineNumber = long.Parse(fileIdLine.Substring(0, colonIndex));
+                    
+                    if (thisLineNumber > activeLineNumber)
+                    {
+                        Debug.Log("Bingo! Line: " + thisLineNumber);
+                        string content = previousLineNumberData.Substring(colonIndex + 1).Trim();
+                        
+                        string fileIDStr = content.Substring(content.IndexOf('&') + 1).Split(' ')[0];
+                        
+                        if (long.TryParse(fileIDStr, out long fileID))
+                        {
+                            fileIDs.Add(fileID);
+                        }
+                        else
+                        {
+                            fileIDs.Add(-1);
+                        }
+                        
+                        // Next step
+                        allNumbers.RemoveAt(allNumbers.Count - 1);
+                        
+                        if (allNumbers.Count == 0)
+                            break;
+                        
+                        activeLineNumber = allNumbers.Last();
+                    }
+                    
+                    previousLineNumberData = fileIdLine;
+                }
+                
+                resultsFileIDs[obj] = fileIDs;
+            }
+            */
+
             
             var endTime  = DateTime.Now;
             var duration = endTime - startTime;
 
+            _lastSearchTime = (float)duration.TotalSeconds;
+            
             EditorUtility.ClearProgressBar();
             
-            Debug.Log($"Reference search completed in <b>{duration.TotalSeconds:F2}</b> seconds.");
+            // Debug.Log($"Reference search completed in <b>{duration.TotalSeconds:F2}</b> seconds.");
         }
     }
 }
