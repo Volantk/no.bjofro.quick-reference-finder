@@ -187,7 +187,7 @@ namespace Bears
 
             string[] exts =
             {
-                /*"meta", */"prefab", "unity", "mat", "asset"
+                /*"meta", */"prefab", "unity", "mat", "asset", "shader", "cginc", "compute"
             };
 
             string projectDir    = Application.dataPath.Substring(0, Application.dataPath.Length - 7);
