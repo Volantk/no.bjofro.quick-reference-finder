@@ -75,12 +75,14 @@ namespace Bears
 
                 searchTargetGuid = EditorGUILayout.TextField("Text", searchTargetGuid);
 
-                GUI.color = Color.yellow;
-                if (GUILayout.Button("Search", GUILayout.Width(70)))
+                GUI.enabled = searchTargetGuid.Length >= 3;
+                GUI.color   = Color.yellow;
+                if (GUILayout.Button(GUI.enabled ? "Search" : "Min 3 chars!", GUILayout.Width(90)))
                 {
                     SearchForString(searchTargetGuid);
                 }
                 GUI.color = Color.white;
+                GUI.enabled = true;
             }
             
             GUI.enabled = false;
@@ -99,6 +101,11 @@ namespace Bears
 
         private void DrawResults()
         {
+            if (results.Count + nonAssetResults.Count >= 500)
+            {
+                EditorGUILayout.HelpBox("Too many results (>500). Please narrow down your search.", MessageType.Warning);
+            }
+            
             if (results.Count > 0)
             {
                 EditorGUILayout.LabelField($"Found {results.Count} references:");
@@ -230,6 +237,12 @@ namespace Bears
                 {
                     if (!nonAssetResults.Contains(path))
                         nonAssetResults.Add(path);
+                }
+                
+                if (results.Count + nonAssetResults.Count >= 500)
+                {
+                    Debug.LogWarning("Reference search aborted: too many results (>500). Please narrow down your search.");
+                    break;
                 }
             }
             
