@@ -97,6 +97,11 @@ namespace Bears
                 DrawResults();
                 EditorGUILayout.EndScrollView();
             }
+            
+            if(GUILayout.Button("Select All Results"))
+            {
+                Selection.objects = results.ToArray();
+            }
         }
 
         private void DrawResults()
