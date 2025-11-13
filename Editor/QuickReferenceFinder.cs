@@ -31,7 +31,6 @@ namespace Bears
 
         private static QuickReferenceFinder GetWindow()
         {
-            Debug.Log("GetWindow");
             QuickReferenceFinder window = GetWindow<QuickReferenceFinder>("Quick Reference Finder");
             window.minSize = new Vector2(600, 600);
             window.Show();
@@ -160,7 +159,7 @@ namespace Bears
 
             DestroyImmediate(window);
             
-            Debug.Log($"Reference search completed in <b>{duration.TotalSeconds:F2}</b> seconds. Found {results.Assets.Count} asset references and {results.NonAssetPaths.Count} non-asset references.");
+            Debug.Log($"Search for {searchText} completed in <b>{duration.TotalSeconds:F2}</b> seconds. Found {results.Assets.Count} asset references and {results.NonAssetPaths.Count} non-asset references.");
 
             return results;
         }
@@ -177,6 +176,7 @@ namespace Bears
         // [SerializeField] private List<string> nonAssetResults;
 
         private Vector2 _scroll;
+        private Vector2 _leftPanelScroll;
         
         static GUIStyle leftButtonStyle;
         
@@ -217,16 +217,41 @@ namespace Bears
         [MenuItem("Assets/Find References In Project (Quick)", true, 19)]
         private static bool Validate_AssetContextMenuSearch()
         {
-            return Selection.activeObject != null && AssetDatabase.Contains(Selection.activeObject);
+            return Selection.assetGUIDs != null && Selection.assetGUIDs.Length > 0;
         }      
         
         [MenuItem("Assets/Find References In Project (Quick)", false, 19)]
         private static void AssetContextMenuSearch()
         {
-            // Open the window and start search
             QuickReferenceFinder window = GetWindow();
-            SearchResults results = window.FindReferencesToSelectedObject();
-            window.AddAndDisplayResults(results);
+            
+            if (Selection.assetGUIDs.Length == 1)
+            {
+                window.FindReferencesToSelectedObject();
+                return;
+            }
+            
+            int userAction;
+            
+            if (SessionState.GetBool("QRF_DoNotAskAgain", false))
+            {
+                userAction = 0; // Yes
+            }
+            else
+            {
+                userAction = EditorUtility.DisplayDialogComplex("Find References to Selected Object",
+                    $"This will search for references to the selected object \"{Selection.activeObject.name}\" in the project. This may take some time depending on project size.\n\nDo you want to proceed?",
+                    "Yes", "No", "Yes, Don't Ask Again");
+                
+                if (userAction == 2)
+                {
+                    SessionState.SetBool("QRF_DoNotAskAgain", true);
+                    userAction = 0;
+                }
+            }
+            
+            if (userAction == 0)
+                window.FindReferencesToAllSelectedObjects();
         }
         
         private void OnGUI()
@@ -284,46 +309,51 @@ namespace Bears
                 using (var vs = new EditorGUILayout.VerticalScope("box"))
                 {
                     GUILayout.Label("Search History", EditorStyles.centeredGreyMiniLabel);
-                    
-                    for (var i = 0; i < allSearchResults.Count; i++)
+
+                    using (var scrollScope = new EditorGUILayout.ScrollViewScope(_leftPanelScroll))
                     {
-                        var res = allSearchResults[i];
-
-                        string searchLabel = res.TargetObject != null
-                            ? $"{res.TargetObject.name} ({res.TargetObject.GetType().Name})"
-                            : $"\"{res.SearchText}\"";
-
-                        using (var scope = new EditorGUILayout.HorizontalScope())
+                        for (var i = 0; i < allSearchResults.Count; i++)
                         {
-                            var guiContent = new GUIContent(searchLabel, $"\"{res.SearchText}\"\n{res.SearchTime:U}");
-                            
-                            if (GUILayout.Toggle(allSearchResults.Count > 1 && _displayedResults == res, guiContent, leftButtonStyle, GUILayout.Width(leftPanelWidth - 20)))
-                            {
-                                _displayedResults = res;
-                            }
+                            var res = allSearchResults[i];
 
-                            if (GUILayout.Button("X", GUILayout.Width(20)))
+                            string searchLabel = res.TargetObject != null
+                                ? $"{res.TargetObject.name} ({res.TargetObject.GetType().Name})"
+                                : $"\"{res.SearchText}\"";
+
+                            using (var scope = new EditorGUILayout.HorizontalScope())
                             {
-                                allSearchResults.RemoveAt(i);
-                                if (_displayedResults == res)
+                                var guiContent = new GUIContent(searchLabel, $"\"{res.SearchText}\"\n{res.SearchTime:U}");
+                            
+                                if (GUILayout.Toggle(allSearchResults.Count > 1 && _displayedResults == res, guiContent, leftButtonStyle, GUILayout.Width(leftPanelWidth - 20 - 25)))
                                 {
-                                    // select next if possible, otherwise previous, otherwise first
-                                    if (i < allSearchResults.Count)
-                                        _displayedResults = allSearchResults[i];
-                                    else if (i - 1 >= 0)
-                                        _displayedResults = allSearchResults[i - 1];
-                                    else
-                                        _displayedResults = allSearchResults.FirstOrDefault();
+                                    _displayedResults = res;
                                 }
 
-                                break;
+                                if (GUILayout.Button("X", GUILayout.Width(20)))
+                                {
+                                    allSearchResults.RemoveAt(i);
+                                    if (_displayedResults == res)
+                                    {
+                                        // select next if possible, otherwise previous, otherwise first
+                                        if (i < allSearchResults.Count)
+                                            _displayedResults = allSearchResults[i];
+                                        else if (i - 1 >= 0)
+                                            _displayedResults = allSearchResults[i - 1];
+                                        else
+                                            _displayedResults = allSearchResults.FirstOrDefault();
+                                    }
+
+                                    break;
+                                }
                             }
                         }
+                        
+                        _leftPanelScroll = scrollScope.scrollPosition;
                     }
 
                     GUI.backgroundColor = Color.gray;
                     GUI.contentColor = new Color(0.75f, 0.75f, 0.75f, 1f);
-                    if (GUILayout.Button("Clear All Searches", EditorStyles.miniButton, GUILayout.Width(leftPanelWidth)))
+                    if (GUILayout.Button("Clear All Searches", EditorStyles.miniButton, GUILayout.Width(leftPanelWidth - 5)))
                     {
                         allSearchResults.Clear();
                         _displayedResults = null;
@@ -336,7 +366,7 @@ namespace Bears
 
             GUILayout.EndVertical();
             
-            float width = position.width - leftPanelWidth;
+            float width = position.width - leftPanelWidth - 10;
             DrawResultsWithScrollAndButtons(_displayedResults, width);
             
             EditorGUILayout.EndHorizontal();
@@ -488,7 +518,7 @@ namespace Bears
             });
         }   
         
-        private SearchResults FindReferencesToSelectedObject()
+        private void FindReferencesToSelectedObject()
         {
             Object activeObject = Selection.activeObject;
             
@@ -496,11 +526,26 @@ namespace Bears
             
             string selectedPath = AssetDatabase.GetAssetPath(activeObject);
             string selectedGuid = AssetDatabase.AssetPathToGUID(selectedPath);
+            AddAndDisplayResults(FindReferencesToString(selectedGuid));
+        }     
+        
+        private void FindReferencesToAllSelectedObjects()
+        {
+            bool canceled;
 
-            var results = FindReferencesToString(selectedGuid);
-            results.TargetObject = activeObject;
-
-            return results;
+            string[] assetGUIDs = Selection.assetGUIDs;
+            
+            foreach (string guid in assetGUIDs)
+            {
+                canceled = EditorUtility.DisplayCancelableProgressBar("Searching References", $"{AssetDatabase.GUIDToAssetPath(guid)}", Array.IndexOf(assetGUIDs, guid) / (float)assetGUIDs.Length);
+                
+                if (canceled)
+                    break;
+                
+                AddAndDisplayResults(FindReferencesToString(guid));
+            }
+            
+            EditorUtility.ClearProgressBar();
         }
     }
 }
