@@ -134,21 +134,41 @@ namespace Bears
             }
         }
 
-        private Task<string> RunFindstr(string selectedGuid, string dataPath, string ext)
+        private bool IsMacOS()
+        {
+            return Application.platform == RuntimePlatform.OSXEditor;
+        }
+
+        private Task<string> RunSearch(string selectedGuid, string dataPath, string ext)
         {
             return Task.Run(() =>
             {
-                // string arguments = $"/C findstr /S /M /C:\"{selectedGuid}\" \"{dataPath}\\*.{ext}\"";
-                // include line numbers in output for easier parsing
-                string arguments = $"/C findstr /S /N /C:\"{selectedGuid}\" \"{dataPath}\\*.{ext}\"";
+                string processName;
+                string arguments;
                 
-                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", arguments)
+                if (IsMacOS())
+                {
+                    // macOS: use grep with bash
+                    // -r = recursive, -n = line numbers, --include = file pattern
+                    processName = "/bin/bash";
+                    arguments = $"-c \"grep -rn '{selectedGuid}' --include='*.{ext}' '{dataPath}'\"";
+                }
+                else
+                {
+                    // Windows: use findstr with cmd
+                    // /S = recursive, /N = line numbers, /C = literal search string
+                    processName = "cmd.exe";
+                    arguments = $"/C findstr /S /N /C:\"{selectedGuid}\" \"{dataPath}\\*.{ext}\"";
+                }
+                
+                var psi = new System.Diagnostics.ProcessStartInfo(processName, arguments)
                 {
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
                     UseShellExecute        = false,
                     CreateNoWindow         = true
                 };
+                
                 using (var process = System.Diagnostics.Process.Start(psi))
                 {
                     string output = process.StandardOutput.ReadToEnd();
@@ -157,7 +177,7 @@ namespace Bears
                     process.WaitForExit();
                     
                     if (!string.IsNullOrEmpty(error))
-                        Debug.LogWarning($"findstr error: {error}");
+                        Debug.LogWarning($"Search error: {error}");
                     
                     // normalize line endings to environment
                     output = output.Replace("\r\n", Environment.NewLine).Replace("\n", Environment.NewLine);
@@ -197,9 +217,9 @@ namespace Bears
 
             string projectDir    = Application.dataPath.Substring(0, Application.dataPath.Length - 7);
 
-            IEnumerable<Task<string>> assetTasks    = exts.Select(ext => RunFindstr(target, Path.Combine(projectDir, "Assets"), ext));
-            IEnumerable<Task<string>> packageTasks  = exts.Select(ext => RunFindstr(target, Path.Combine(projectDir, "Packages"), ext));
-            IEnumerable<Task<string>> settingsTasks = exts.Select(ext => RunFindstr(target, Path.Combine(projectDir, "ProjectSettings"), ext));
+            IEnumerable<Task<string>> assetTasks    = exts.Select(ext => RunSearch(target, Path.Combine(projectDir, "Assets"), ext));
+            IEnumerable<Task<string>> packageTasks  = exts.Select(ext => RunSearch(target, Path.Combine(projectDir, "Packages"), ext));
+            IEnumerable<Task<string>> settingsTasks = exts.Select(ext => RunSearch(target, Path.Combine(projectDir, "ProjectSettings"), ext));
 
             Task<string>[] tasks = assetTasks.Concat(packageTasks).Concat(settingsTasks).ToArray();
             Task.WaitAll(tasks);
@@ -224,7 +244,10 @@ namespace Bears
                 cleanFilePath  = path.Substring(0, colonIndex);
                 fileLineNumber = long.Parse(path.Substring(colonIndex + 1, path.IndexOf(':', colonIndex + 1) - colonIndex - 1));
                 
-                string assetPath = cleanFilePath.Replace("\\", "/").Replace(Application.dataPath, "Assets");
+                // Normalize paths for cross-platform compatibility
+                string normalizedFilePath = cleanFilePath.Replace("\\", "/");
+                string normalizedDataPath = Application.dataPath.Replace("\\", "/");
+                string assetPath = normalizedFilePath.Replace(normalizedDataPath, "Assets");
                 
                 Object obj = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
                 if (obj != null)
