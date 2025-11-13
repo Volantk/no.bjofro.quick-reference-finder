@@ -14,6 +14,7 @@ namespace Bears
         [Serializable]
         public class SearchResults
         {
+            public DateTime SearchTime = DateTime.Now;
             public string SearchText;
             public Object TargetObject;
             public List<Object> Assets = new List<Object>();
@@ -23,7 +24,18 @@ namespace Bears
         [MenuItem("Tools/Quick Reference Finder")]
         public static void ShowWindow()
         {
-            GetWindow<QuickReferenceFinder>("Quick Reference Finder");
+            // if existing window, return it
+            // if new window, create it with specific dimensions
+            GetWindow();
+        }
+
+        private static QuickReferenceFinder GetWindow()
+        {
+            Debug.Log("GetWindow");
+            QuickReferenceFinder window = GetWindow<QuickReferenceFinder>("Quick Reference Finder");
+            window.minSize = new Vector2(600, 600);
+            window.Show();
+            return window;
         }
 
         /// <summary>
@@ -153,7 +165,7 @@ namespace Bears
             return results;
         }
 
-        [SerializeField] private string searchTargetGuid;
+        [SerializeField] private string searchTargetGuid = "";
         [SerializeField] private Object searchTargetObject;
         
         [SerializeField] private SearchResults searchResults;
@@ -212,7 +224,7 @@ namespace Bears
         private static void AssetContextMenuSearch()
         {
             // Open the window and start search
-            QuickReferenceFinder window = GetWindow<QuickReferenceFinder>("Quick Reference Finder");
+            QuickReferenceFinder window = GetWindow();
             SearchResults results = window.FindReferencesToSelectedObject();
             window.AddAndDisplayResults(results);
         }
@@ -221,55 +233,42 @@ namespace Bears
         {
             InitStyles();
             
-            GUILayout.Label("Find all assets containing the search text in /Assets, /Packages and /ProjectSettings", EditorStyles.centeredGreyMiniLabel);
-            bool hasValidSelection = Selection.activeObject != null && AssetDatabase.Contains(Selection.activeObject);
-
-            GUI.enabled = hasValidSelection;
-            GUI.backgroundColor = new Color(0.22f, 0.4f, 0.87f);
-            
-            string label = hasValidSelection
-                ? $"Search for selected asset:\n{Selection.activeObject.name} ({Selection.activeObject.GetType()})"
-                : "Select an asset to search for its GUID.";
-            
-            if (GUILayout.Button(label, GUILayout.Height(40)))
+            using (var vs = new EditorGUILayout.VerticalScope("box"))
             {
-                SearchResults results = FindReferencesToSelectedObject();
-                AddAndDisplayResults(results);
-            }
-            
-            GUI.backgroundColor = Color.white;
-            GUI.enabled = true;
-            
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                EditorGUIUtility.labelWidth = 38;
-
-                searchTargetObject = EditorGUILayout.ObjectField("Asset", searchTargetObject, typeof(Object), false);
-
-                GUI.enabled = searchTargetObject;
-                GUI.color   = Color.yellow;
-                if (GUILayout.Button("Search", GUILayout.Width(90)))
+                var labelWidth = 60;
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    AddAndDisplayResults(FindReferencesToAsset(searchTargetObject));
+                    EditorGUIUtility.labelWidth = labelWidth;
+
+                    searchTargetObject = EditorGUILayout.ObjectField("Asset", searchTargetObject, typeof(Object), false);
+
+                    GUI.enabled = searchTargetObject;
+                    GUI.color   = Color.yellow;
+                    if (GUILayout.Button("Search", GUILayout.Width(90)))
+                    {
+                        AddAndDisplayResults(FindReferencesToAsset(searchTargetObject));
+                    }
+
+                    GUI.color   = Color.white;
+                    GUI.enabled = true;
                 }
-                GUI.color = Color.white;
-                GUI.enabled = true;
-            }            
-            
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                EditorGUIUtility.labelWidth = 38;
 
-                searchTargetGuid = EditorGUILayout.TextField("Text", searchTargetGuid);
-
-                GUI.enabled = searchTargetGuid.Length >= 3;
-                GUI.color   = Color.yellow;
-                if (GUILayout.Button(GUI.enabled ? "Search" : "Min 3 chars!", GUILayout.Width(90)))
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    AddAndDisplayResults(FindReferencesToString(searchTargetGuid));
+                    EditorGUIUtility.labelWidth = labelWidth;
+
+                    searchTargetGuid = EditorGUILayout.TextField("Text/guid", searchTargetGuid);
+
+                    GUI.enabled = searchTargetGuid != null && searchTargetGuid.Length >= 3;
+                    GUI.color   = Color.yellow;
+                    if (GUILayout.Button(GUI.enabled ? "Search" : "Min 3 chars!", GUILayout.Width(90)))
+                    {
+                        AddAndDisplayResults(FindReferencesToString(searchTargetGuid));
+                    }
+
+                    GUI.color   = Color.white;
+                    GUI.enabled = true;
                 }
-                GUI.color = Color.white;
-                GUI.enabled = true;
             }
 
             EditorGUIUtility.labelWidth = 0;
@@ -282,47 +281,57 @@ namespace Bears
             
             if (allSearchResults.Count > 0)
             {
-                GUILayout.Label("Search History", EditorStyles.boldLabel);
-                
-                for (var i = 0; i < allSearchResults.Count; i++)
+                using (var vs = new EditorGUILayout.VerticalScope("box"))
                 {
-                    var res = allSearchResults[i];
-
-                    string searchLabel = res.TargetObject != null
-                        ? $"{res.TargetObject.name} ({res.TargetObject.GetType().Name})"
-                        : $"\"{res.SearchText}\"";
-
-                    using (var scope = new EditorGUILayout.HorizontalScope())
+                    GUILayout.Label("Search History", EditorStyles.centeredGreyMiniLabel);
+                    
+                    for (var i = 0; i < allSearchResults.Count; i++)
                     {
-                        if (GUILayout.Toggle(allSearchResults.Count > 1 && _displayedResults == res, searchLabel, leftButtonStyle, GUILayout.Width(leftPanelWidth-20)))
+                        var res = allSearchResults[i];
+
+                        string searchLabel = res.TargetObject != null
+                            ? $"{res.TargetObject.name} ({res.TargetObject.GetType().Name})"
+                            : $"\"{res.SearchText}\"";
+
+                        using (var scope = new EditorGUILayout.HorizontalScope())
                         {
-                            _displayedResults = res;
-                        }
-                        if(GUILayout.Button("X", GUILayout.Width(20)))
-                        {
-                            allSearchResults.RemoveAt(i);
-                            if (_displayedResults == res)
+                            var guiContent = new GUIContent(searchLabel, $"\"{res.SearchText}\"\n{res.SearchTime:U}");
+                            
+                            if (GUILayout.Toggle(allSearchResults.Count > 1 && _displayedResults == res, guiContent, leftButtonStyle, GUILayout.Width(leftPanelWidth - 20)))
                             {
-                                // select next if possible, otherwise previous, otherwise first
-                                if (i < allSearchResults.Count)
-                                    _displayedResults = allSearchResults[i];
-                                else if (i - 1 >= 0)
-                                    _displayedResults = allSearchResults[i - 1];
-                                else
-                                    _displayedResults = allSearchResults.FirstOrDefault();
+                                _displayedResults = res;
                             }
-                            break;
+
+                            if (GUILayout.Button("X", GUILayout.Width(20)))
+                            {
+                                allSearchResults.RemoveAt(i);
+                                if (_displayedResults == res)
+                                {
+                                    // select next if possible, otherwise previous, otherwise first
+                                    if (i < allSearchResults.Count)
+                                        _displayedResults = allSearchResults[i];
+                                    else if (i - 1 >= 0)
+                                        _displayedResults = allSearchResults[i - 1];
+                                    else
+                                        _displayedResults = allSearchResults.FirstOrDefault();
+                                }
+
+                                break;
+                            }
                         }
                     }
+
+                    GUI.backgroundColor = Color.gray;
+                    GUI.contentColor = new Color(0.75f, 0.75f, 0.75f, 1f);
+                    if (GUILayout.Button("Clear All Searches", EditorStyles.miniButton, GUILayout.Width(leftPanelWidth)))
+                    {
+                        allSearchResults.Clear();
+                        _displayedResults = null;
+                    }
+
+                    GUI.backgroundColor = Color.white;
+                    GUI.contentColor = Color.white;
                 }
-                
-                GUI.backgroundColor = Color.gray;
-                if (GUILayout.Button("Clear", GUILayout.Width(leftPanelWidth)))
-                {
-                    allSearchResults.Clear();
-                    _displayedResults = null;
-                }
-                GUI.backgroundColor = Color.white;
             }
 
             GUILayout.EndVertical();
@@ -344,7 +353,7 @@ namespace Bears
         {
             using (new EditorGUILayout.VerticalScope(GUILayout.Width(width)))
             {
-                if (results != null && results.Assets.Count + results.NonAssetPaths.Count > 0)
+                if (results != null/* && results.Assets.Count + results.NonAssetPaths.Count > 0*/)
                 {
                     _scroll = EditorGUILayout.BeginScrollView(_scroll);
                     DrawResults(results);
@@ -361,57 +370,68 @@ namespace Bears
 
         private void DrawResults(SearchResults results)
         {
-            EditorGUIUtility.labelWidth = 85;
-            if(results.TargetObject)
-                EditorGUILayout.ObjectField("Searched for:", results.TargetObject, typeof(Object), false);
-            else
-                EditorGUILayout.LabelField("Searched for:", $"\"{results.SearchText}\"");
+            using (var verticalScope = new EditorGUILayout.VerticalScope("box"))
+            {
+                EditorGUIUtility.labelWidth = 85;
+                if(results.TargetObject)
+                    EditorGUILayout.ObjectField("Searched for:", results.TargetObject, typeof(Object), false);
+                else
+                    EditorGUILayout.LabelField("Searched for:", $"\"{results.SearchText}\"");
             
-            List<Object> assets          = results.Assets;
-            List<string> nonAssetResults = results.NonAssetPaths;
+                List<Object> assets          = results.Assets;
+                List<string> nonAssetResults = results.NonAssetPaths;
 
-            if (assets.Count + nonAssetResults.Count >= 500)
-            {
-                EditorGUILayout.HelpBox("Too many results (>500). Please narrow down your search.", MessageType.Warning);
-            }
+                if (assets.Count + nonAssetResults.Count >= 500)
+                {
+                    EditorGUILayout.HelpBox("Too many results (>500). Please narrow down your search.", MessageType.Warning);
+                }
             
-            if (assets.Count > 0)
-            {
-                EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField($"Found {assets.Count} references", GUILayout.Width(120));
+                if (assets.Count > 0)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.LabelField($"Found {assets.Count} references", GUILayout.Width(120));
                 
-                GUILayout.FlexibleSpace();
-                if (GUILayout.Button("Select All", GUILayout.Width(100)))
-                {
-                    Selection.objects = results.Assets.ToArray();
-                }
-                EditorGUILayout.EndHorizontal();
-
-                using (var scope = new EditorGUILayout.VerticalScope("box"))
-                {
-                    foreach (var obj in assets)
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("Select All", GUILayout.Width(100)))
                     {
-                        EditorGUILayout.ObjectField(obj, obj.GetType(), false);
+                        Selection.objects = results.Assets.ToArray();
                     }
-                }
-            }
+                    EditorGUILayout.EndHorizontal();
 
-            if (nonAssetResults.Count > 0)
-            {
-                EditorGUILayout.LabelField($"Found {nonAssetResults.Count} non-asset references:");
-                foreach (var resultPath in nonAssetResults)
-                {
-                    using (var scope = new EditorGUILayout.HorizontalScope())
+                    using (var scope = new EditorGUILayout.VerticalScope("box"))
                     {
-                        string p = resultPath;
-                        p = p.Replace(Application.dataPath.Substring(0, Application.dataPath.Length - 7), ""); // make path relative to project
-                        var shortenedPath = "..." + p.Substring(0, Math.Min(80, p.Length)) + "...";
-                        GUILayout.Label(new GUIContent(shortenedPath, resultPath));
-                        if (GUILayout.Button("Browse", GUILayout.Width(100)))
+                        foreach (var obj in assets)
                         {
-                            EditorUtility.RevealInFinder(resultPath);
+                            EditorGUILayout.ObjectField(obj, obj.GetType(), false);
                         }
                     }
+                }
+
+                if (nonAssetResults.Count > 0)
+                {
+                    EditorGUILayout.LabelField($"Found {nonAssetResults.Count} non-asset references:");
+                    foreach (var resultPath in nonAssetResults)
+                    {
+                        using (var scope = new EditorGUILayout.HorizontalScope())
+                        {
+                            string p = resultPath;
+                            p = p.Replace(Application.dataPath.Substring(0, Application.dataPath.Length - 7), ""); // make path relative to project
+                            var shortenedPath = "..." + p.Substring(0, Math.Min(80, p.Length)) + "...";
+                            GUILayout.Label(new GUIContent(shortenedPath, resultPath));
+                            if (GUILayout.Button("Browse", GUILayout.Width(100)))
+                            {
+                                EditorUtility.RevealInFinder(resultPath);
+                            }
+                        }
+                    }
+                }
+                
+                // no results found
+                if (assets.Count == 0 && nonAssetResults.Count == 0)
+                {
+                    EditorGUILayout.Space();
+                    EditorGUILayout.LabelField("No references found.", EditorStyles.centeredGreyMiniLabel);
+                    EditorGUILayout.Space();
                 }
             }
         }
@@ -471,6 +491,9 @@ namespace Bears
         private SearchResults FindReferencesToSelectedObject()
         {
             Object activeObject = Selection.activeObject;
+            
+            searchTargetObject = activeObject;
+            
             string selectedPath = AssetDatabase.GetAssetPath(activeObject);
             string selectedGuid = AssetDatabase.AssetPathToGUID(selectedPath);
 
